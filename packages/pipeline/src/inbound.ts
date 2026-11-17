@@ -4,6 +4,7 @@ import { detectUnsubscribeIntent, parseBounce, shouldStopSequence, buildCallScri
 import { analyzeReply } from "@solver/llm";
 import { slackMessages } from "@solver/notify";
 import type { PipelineContext } from "./context";
+import { extractAddress, matchKeys, suppressionDomain } from "./inboundMatch";
 
 const POLL_STATE_KEY = "poll:gmail";
 
@@ -29,29 +30,34 @@ export async function suppressLead(ctx: PipelineContext, lead: Lead, email: stri
     const value = row?.isPersonal ? `sha256:${createHash("sha256").update(email.toLowerCase()).digest("hex")}` : email.toLowerCase();
     await addSuppression(ctx.db, { value, kind: "email", reason, sourceMessageId });
     if (row?.isPersonal) await ctx.db.update(contacts).set({ value }).where(eq(contacts.id, row.id));
-    const domain = email.split("@")[1];
-    if (domain && !row?.isPersonal) await addSuppression(ctx.db, { value: domain.toLowerCase(), kind: "domain", reason, sourceMessageId });
+    // 공용 메일 도메인(naver·gmail 등)은 도메인 단위로 억제하지 않는다 — 무관한 리드까지 막힌다
+    const domain = suppressionDomain(email, !!row?.isPersonal);
+    if (domain) await addSuppression(ctx.db, { value: domain, kind: "domain", reason, sourceMessageId });
   }
   if (lead.ykiho) await addSuppression(ctx.db, { value: lead.ykiho, kind: "ykiho", reason, sourceMessageId });
   await ctx.db.update(leads).set({ status: "unsubscribed", excludedReason: reason }).where(eq(leads.id, lead.id));
 }
 
-/** 스레드 매칭: In-Reply-To·스레드 ID → 발송 레코드 → 리드. 실패 시 도메인 추정 */
-async function matchLead(ctx: PipelineContext, mail: InboundMail): Promise<{ lead: Lead | null; outMessageId: string | null; matchedBy: string }> {
+/**
+ * 스레드 ID → 발송 레코드 → 리드. 실패 시 주소 정확 일치, 그다음 병원 자체 도메인 추정.
+ * 바운스는 반송된 수신자 주소로만 찾고, 공용 메일 도메인은 추정하지 않는다 (inboundMatch.ts).
+ */
+async function matchLead(ctx: PipelineContext, mail: InboundMail, bounceAddress: string | null): Promise<{ lead: Lead | null; outMessageId: string | null; matchedBy: string }> {
   const [byThread] = await ctx.db.select().from(messages).where(and(eq(messages.gmailThreadId, mail.gmailThreadId), eq(messages.direction, "out"))).limit(1);
   if (byThread?.leadId) {
     const lead = await ctx.db.query.leads.findFirst({ where: eq(leads.id, byThread.leadId) });
     return { lead: lead ?? null, outMessageId: byThread.id, matchedBy: "thread" };
   }
-  const fromEmail = mail.from.match(/[\w.+-]+@[\w.-]+/)?.[0]?.toLowerCase();
-  if (fromEmail) {
-    const c = await ctx.db.query.contacts.findFirst({ where: and(eq(contacts.type, "email"), sql`lower(${contacts.value}) = ${fromEmail}`) });
+  const keys = matchKeys(mail, bounceAddress);
+  if (keys.exactEmail) {
+    const c = await ctx.db.query.contacts.findFirst({ where: and(eq(contacts.type, "email"), sql`lower(${contacts.value}) = ${keys.exactEmail}`) });
     if (c) {
       const lead = await ctx.db.query.leads.findFirst({ where: eq(leads.id, c.leadId) });
       return { lead: lead ?? null, outMessageId: null, matchedBy: "email" };
     }
-    const domain = fromEmail.split("@")[1]!;
-    const c2 = await ctx.db.query.contacts.findFirst({ where: and(eq(contacts.type, "email"), sql`lower(${contacts.value}) like ${"%@" + domain}`) });
+  }
+  if (keys.guessDomain) {
+    const c2 = await ctx.db.query.contacts.findFirst({ where: and(eq(contacts.type, "email"), sql`lower(${contacts.value}) like ${"%@" + keys.guessDomain}`) });
     if (c2) {
       const lead = await ctx.db.query.leads.findFirst({ where: eq(leads.id, c2.leadId) });
       return { lead: lead ?? null, outMessageId: null, matchedBy: "domain" };
@@ -60,13 +66,17 @@ async function matchLead(ctx: PipelineContext, mail: InboundMail): Promise<{ lea
   return { lead: null, outMessageId: null, matchedBy: "none" };
 }
 
-/** 회신 1건 처리: 저장 → 분류 → 억제/중단 → Slack. 멱등(gmail_msg_id unique) */
+/**
+ * 회신 1건 처리: 매칭 → 저장 → 분류 → 억제/중단 → Slack. 멱등(gmail_msg_id unique).
+ * 리드와 연결되지 않는 메일(담당자 개인·업무 메일 등)은 저장하지 않고 LLM에도 보내지 않는다.
+ */
 export async function processInbound(ctx: PipelineContext, mail: InboundMail) {
   const [exists] = await ctx.db.select({ id: messages.id }).from(messages).where(eq(messages.gmailMsgId, mail.gmailMsgId)).limit(1);
   if (exists) return { skipped: true };
 
-  const { lead, outMessageId, matchedBy } = await matchLead(ctx, mail);
   const bounce = mail.isBounce ? parseBounce(mail) : null;
+  const { lead, outMessageId, matchedBy } = await matchLead(ctx, mail, bounce?.address ?? null);
+  if (!lead) return { skipped: true, unmatched: true };
 
   let classification: import("@solver/shared").ReplyClass;
   let summary = "";
@@ -89,15 +99,10 @@ export async function processInbound(ctx: PipelineContext, mail: InboundMail) {
 
   const [msg] = await ctx.db
     .insert(messages)
-    .values({ leadId: lead?.id ?? null, direction: "in", gmailMsgId: mail.gmailMsgId, gmailThreadId: mail.gmailThreadId, to: mail.to, from: mail.from, subject: mail.subject, body: mail.textBody, receivedAt: mail.receivedAt, classification, summary, proposedTimes })
+    .values({ leadId: lead.id, direction: "in", gmailMsgId: mail.gmailMsgId, gmailThreadId: mail.gmailThreadId, to: mail.to, from: mail.from, subject: mail.subject, body: mail.textBody, receivedAt: mail.receivedAt, classification, summary, proposedTimes })
     .onConflictDoNothing({ target: messages.gmailMsgId })
     .returning();
   if (!msg) return { skipped: true };
-
-  if (!lead) {
-    ctx.log(null, `미매칭 회신 ${mail.from} · ${mail.subject}`);
-    return { skipped: false, unmatched: true, messageId: msg.id };
-  }
 
   const ref = await leadRef(ctx, lead);
   const eventType = classification === "bounce" ? "bounce" : classification === "unsubscribe" ? "unsubscribe" : "reply";
@@ -106,7 +111,7 @@ export async function processInbound(ctx: PipelineContext, mail: InboundMail) {
 
   // 억제·중단은 사람 확인 없이 즉시
   if (classification === "unsubscribe" || (classification === "bounce" && bounce?.hard)) {
-    const email = bounce?.address ?? mail.from.match(/[\w.+-]+@[\w.-]+/)?.[0] ?? null;
+    const email = bounce?.address ?? extractAddress(mail.from);
     await suppressLead(ctx, lead, email, classification === "unsubscribe" ? "수신거부 회신" : `하드 바운스: ${bounce?.reason}`, msg.id);
     await stopSequences(ctx, lead.id, classification === "unsubscribe" ? "unsubscribe" : "bounce");
     const r = await ctx.slack.post(slackMessages.suppressed(ref, { kind: classification === "unsubscribe" ? "unsubscribe" : "hard_bounce", reason: summary }));
@@ -137,13 +142,15 @@ export async function pollGmail(ctx: PipelineContext) {
   try {
     const mails = await ctx.mail.listMessagesSince({ afterEpochSec, maxResults: 50 });
     let processed = 0;
+    let unmatched = 0;
     for (const m of mails) {
       const r = await processInbound(ctx, m);
       if (!r.skipped) processed++;
+      else if ("unmatched" in r && r.unmatched) unmatched++;
     }
     const next = { afterEpochSec: Math.max(afterEpochSec, ...mails.map((m) => Math.floor(m.receivedAt.getTime() / 1000) + 1)), failures: 0 };
     await ctx.db.insert(settings).values({ key: POLL_STATE_KEY, value: next }).onConflictDoUpdate({ target: settings.key, set: { value: next } });
-    return { fetched: mails.length, processed };
+    return { fetched: mails.length, processed, unmatched };
   } catch (e) {
     const failures = (state?.failures ?? 0) + 1;
     await ctx.db.insert(settings).values({ key: POLL_STATE_KEY, value: { afterEpochSec, failures } }).onConflictDoUpdate({ target: settings.key, set: { value: { afterEpochSec, failures } } });
