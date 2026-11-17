@@ -8,6 +8,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { PipelineContext } from "./context";
 
+/** 진단·발송 템플릿이 지원하는 진료과. 진료과별 질문·템플릿이 생기면 이 제한을 푼다. */
+export const AUDIT_DEPT = "정형외과";
+
 /** 강우 플레이스 데이터 (JSON/CSV 입력) — PRD 14절 미결 인터페이스의 초안 */
 export interface PlaceInput {
   ykiho: string;
@@ -43,6 +46,8 @@ export interface AuditOneResult {
 
 /** PRD 6절: 병원 1곳 진단 → audits/audit_runs, 리포트 HTML(+PDF), 랜딩 토큰. */
 export async function auditLead(ctx: PipelineContext, lead: Lead, opts: { place?: PlaceInput | null; skipGeo?: boolean } = {}): Promise<AuditOneResult> {
+  // GEO 질문·리포트·메일 템플릿이 아직 정형외과 전용이다. 다른 진료과에 그대로 돌리면 틀린 내용이 나간다.
+  if (!lead.deptTags.includes(AUDIT_DEPT)) throw new Error(`진단 불가: ${AUDIT_DEPT} 진료과목이 없는 리드 (${lead.name})`);
   // 최신 크롤 결과 → 홈페이지 축
   const [crawl] = await ctx.db.select().from(crawlResults).where(eq(crawlResults.leadId, lead.id)).orderBy(desc(crawlResults.fetchedAt)).limit(1);
   const site: ReportData["site"] | null =

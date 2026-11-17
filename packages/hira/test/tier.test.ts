@@ -34,6 +34,15 @@ describe("helpers", () => {
     expect(l.sido).toBe("서울특별시");
     expect(l.homepage).toBe("https://example.com/");
   });
+  it("수도권 밖 시도 약칭도 정식 명칭으로 저장한다", () => {
+    const base = DRY_RUN_HOSPITALS[0]!;
+    expect(mapHospitalToLead({ ...base, sidoCdNm: "부산" }).sido).toBe("부산광역시");
+    expect(mapHospitalToLead({ ...base, sidoCdNm: "제주" }).sido).toBe("제주특별자치도");
+    expect(mapHospitalToLead({ ...base, sidoCdNm: "세종시" }).sido).toBe("세종특별자치시");
+    expect(mapHospitalToLead({ ...base, sidoCdNm: "경기도" }).sido).toBe("경기도");
+    // 심평원이 주는 통합 명칭처럼 표에 없는 값은 그대로 둔다
+    expect(mapHospitalToLead({ ...base, sidoCdNm: "전남광주" }).sido).toBe("전남광주");
+  });
   it("resolves sido aliases", () => {
     expect(resolveSido("서울")?.code).toBe("110000");
     expect(resolveSido("경기도")?.code).toBe("310000");

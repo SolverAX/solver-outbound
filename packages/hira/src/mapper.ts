@@ -1,6 +1,6 @@
 import { parseYmd } from "@solver/shared";
 import type { HospBasisItem } from "./client";
-import { CL_CODES } from "./codes";
+import { CL_CODES, SIDO_ALIASES, SIDO_CODES } from "./codes";
 
 /** 심평원 응답 → leads insert 형태 */
 export function mapHospitalToLead(h: HospBasisItem) {
@@ -26,8 +26,11 @@ export function mapHospitalToLead(h: HospBasisItem) {
 
 function normalizeSido(s: string | null): string | null {
   if (!s) return null;
-  const map: Record<string, string> = { 서울: "서울특별시", 경기: "경기도", 인천: "인천광역시" };
-  return map[s] ?? s;
+  // 심평원은 "서울"·"부산" 같은 약칭으로 준다 → 전국 공통으로 정식 명칭으로 맞춘다
+  const t = s.trim();
+  if (SIDO_CODES[t]) return t;
+  // "세종시"처럼 약칭에 행정 단위가 붙어 오는 경우도 있다
+  return SIDO_ALIASES[t] ?? SIDO_ALIASES[t.replace(/(특별자치시|특별자치도|광역시|특별시|시|도)$/, "")] ?? t;
 }
 
 export function normalizeUrl(u: string | null | undefined): string | null {

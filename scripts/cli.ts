@@ -21,22 +21,28 @@ import { parse } from "csv-parse/sync";
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { audits, leads, messages, tasks } from "@solver/db";
 import { LEAD_STATUS_LABEL, isDryRun } from "@solver/shared";
-import { createContext, runList, importCsvRows, runCrawlBatch, auditLead, approveAudit, importPlaceData, prepareMail, sendPrepared, listQueued, pollGmail, runFollowup, runDailyDigest, runWeeklyDigest, type PlaceInput } from "@solver/pipeline";
+import { SIDO_CODES } from "@solver/hira";
+import { createContext, runList, importCsvRows, runCrawlBatch, auditLead, AUDIT_DEPT, approveAudit, importPlaceData, prepareMail, sendPrepared, listQueued, pollGmail, runFollowup, runDailyDigest, runWeeklyDigest, type PlaceInput } from "@solver/pipeline";
 
 const ctx = createContext();
 const program = new Command().name("outreach").description(`병의원 GEO 아웃리치 CLI (DRY_RUN=${isDryRun()})`);
 
 program
   .command("list")
-  .requiredOption("--sido <sido>", "시도 (서울/경기/인천)")
+  .requiredOption("--sido <sido>", "시도 (서울/경기/부산 … 또는 전국)")
   .option("--sggu <name>", "시군구 이름 필터")
   .option("--sggu-cd <code>", "시군구 코드")
-  .option("--dept <name>", "진료과", "정형외과")
+  .option("--dept <name>", "진료과 (전체 = 전 진료과, 상세 조회 없이 목록만)", "정형외과")
   .option("--limit <n>", "최대 건수")
   .action(async (o) => {
-    const r = await runList(ctx, { sido: o.sido, sgguName: o.sggu, sgguCd: o.sgguCd, dept: o.dept, limit: o.limit ? Number(o.limit) : undefined });
-    console.table(r.byTier);
-    console.log(r);
+    // 광주는 심평원에서 전남(360000, "전남광주")으로 통합 조회된다
+    const sidos = o.sido === "전국" ? Object.keys(SIDO_CODES).filter((s) => s !== "광주광역시") : [o.sido];
+    for (const sido of sidos) {
+      const r = await runList(ctx, { sido, sgguName: o.sggu, sgguCd: o.sgguCd, dept: o.dept, limit: o.limit ? Number(o.limit) : undefined });
+      console.log(`── ${sido}`);
+      console.table(r.byTier);
+      console.log(r);
+    }
     process.exit(0);
   });
 
@@ -76,7 +82,7 @@ program
       const rows = await ctx.db
         .select({ lead: leads })
         .from(leads)
-        .where(and(sql`${leads.tier} <> 'EXCLUDED'`, o.force ? sql`true` : sql`not exists (select 1 from ${audits} where ${audits.leadId} = ${leads.id} and ${audits.landingToken} is not null)`))
+        .where(and(sql`${leads.tier} <> 'EXCLUDED'`, sql`${AUDIT_DEPT} = any(${leads.deptTags})`, o.force ? sql`true` : sql`not exists (select 1 from ${audits} where ${audits.leadId} = ${leads.id} and ${audits.landingToken} is not null)`))
         .limit(Number(o.limit));
       targets = rows.map((r) => r.lead);
     }

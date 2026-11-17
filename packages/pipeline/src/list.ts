@@ -1,6 +1,6 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { contacts, leads } from "@solver/db";
-import { HiraClient, DGSBJT_BY_NAME, assignTier, estimateStaff, mapHospitalToLead, resolveSido, type HospBasisItem } from "@solver/hira";
+import { HiraClient, DGSBJT_BY_NAME, DGSBJT_CODES, assignTier, estimateStaff, mapHospitalToLead, resolveSido, type HospBasisItem } from "@solver/hira";
 import type { PipelineContext } from "./context";
 
 export interface ListInput {
@@ -24,7 +24,10 @@ export interface ListResult {
 export async function runList(ctx: PipelineContext, input: ListInput): Promise<ListResult> {
   const sido = resolveSido(input.sido);
   if (!sido) throw new Error(`알 수 없는 시도: ${input.sido}`);
-  const dgsbjtCd = DGSBJT_BY_NAME[input.dept ?? "정형외과"];
+  const dept = input.dept ?? "정형외과";
+  if (dept === ALL_DEPTS) return runListAllDepts(ctx, input);
+  const dgsbjtCd = DGSBJT_BY_NAME[dept];
+  if (!dgsbjtCd) throw new Error(`알 수 없는 진료과: ${dept}`);
   const clCds = input.clCds ?? [...ctx.settings.tier.includeClCd];
   const hira = new HiraClient({ dryRun: ctx.dryRun });
 
@@ -43,13 +46,15 @@ export async function runList(ctx: PipelineContext, input: ListInput): Promise<L
     const mapped = mapHospitalToLead(h);
     // 전문의 수 우선 (PRD: 전문과목별 전문의 수가 있으면 우선)
     let doctorCnt = mapped.doctorCnt;
-    let deptTags = ["정형외과"];
+    let deptTags = [dept];
+    let detailOk = false;
     try {
       const depts = await hira.getDepartments(h.ykiho);
-      const ortho = depts.find((d) => d.dgsbjtCd === "05");
-      if (ortho?.dgsbjtPrSdrCnt) doctorCnt = ortho.dgsbjtPrSdrCnt;
+      const own = depts.find((d) => d.dgsbjtCd === dgsbjtCd);
+      if (own?.dgsbjtPrSdrCnt) doctorCnt = own.dgsbjtPrSdrCnt;
       deptTags = depts.map((d) => d.dgsbjtCdNm).filter((n): n is string => !!n);
-      if (!deptTags.includes("정형외과")) deptTags.unshift("정형외과");
+      if (!deptTags.includes(dept)) deptTags.unshift(dept);
+      detailOk = true;
     } catch (e) {
       ctx.log(null, `상세정보 조회 실패 ${h.ykiho}: ${(e as Error).message}`);
     }
@@ -68,10 +73,10 @@ export async function runList(ctx: PipelineContext, input: ListInput): Promise<L
           name: leadValues.name,
           address: leadValues.address,
           homepage: sql`coalesce(${leads.homepage}, ${leadValues.homepage})`,
-          doctorCnt,
-          staffEst,
-          deptTags,
-          tier: sql`case when ${leads.tier} = 'EXCLUDED' then 'EXCLUDED'::tier else ${tier.tier}::tier end`,
+          // 상세 조회가 실패한 재실행에서 기존 전문의 수·진료과·Tier를 추정값으로 덮어쓰지 않는다
+          ...(detailOk
+            ? { doctorCnt, staffEst, deptTags, tier: sql`case when ${leads.tier} = 'EXCLUDED' then 'EXCLUDED'::tier else ${tier.tier}::tier end` }
+            : { deptTags: sql`case when ${dept} = any(${leads.deptTags}) then ${leads.deptTags} else array_append(${leads.deptTags}, ${dept}) end` }),
           hiraRaw: leadValues.hiraRaw,
         },
       })
@@ -88,6 +93,72 @@ export async function runList(ctx: PipelineContext, input: ListInput): Promise<L
     }
   }
   ctx.log(null, `리스트업 완료 ${result.fetched}곳 (${((Date.now() - started) / 1000).toFixed(1)}s)`, { ...result });
+  return result;
+}
+
+export const ALL_DEPTS = "전체";
+
+/**
+ * 전 진료과 리스트업. 병원별 상세 조회(1곳당 1회) 대신 목록 API만 쓴다:
+ *  1) 진료과 필터 없이 전체 목록 → 신규 리드 추가 (기존 리드의 전문의 수·진료과·Tier는 건드리지 않음)
+ *  2) 진료과 코드별 목록 → 해당 병원에 진료과 태그 추가
+ * 의사 수는 목록의 전체 의사 수(drTotCnt)를 쓴다. 진료과 태그는 codes.ts에 있는 과목만 붙는다.
+ */
+export async function runListAllDepts(ctx: PipelineContext, input: ListInput): Promise<ListResult> {
+  const sido = resolveSido(input.sido);
+  if (!sido) throw new Error(`알 수 없는 시도: ${input.sido}`);
+  const clCds = input.clCds ?? [...ctx.settings.tier.includeClCd];
+  const hira = new HiraClient({ dryRun: ctx.dryRun });
+  const numOfRows = 1000;
+  const started = Date.now();
+  const keep = (h: HospBasisItem) => !input.sgguName || (h.sgguCdNm ?? "").replace(/\s/g, "").includes(input.sgguName.replace(/\s/g, ""));
+
+  let items: HospBasisItem[] = [];
+  for (const clCd of clCds) {
+    const rows = await hira.listHospitals({ sidoCd: sido.code, sgguCd: input.sgguCd, clCd, numOfRows }, (p, total) => ctx.log(null, `HIRA ${sido.name} ${clCd} 전체 page ${p} / total ${total}`));
+    items.push(...rows.filter(keep));
+  }
+  if (input.limit) items = items.slice(0, input.limit);
+  const wanted = new Set(items.map((h) => h.ykiho));
+
+  const result: ListResult = { fetched: items.length, inserted: 0, updated: 0, excluded: 0, byTier: {} };
+  for (const h of items) {
+    const { phone, ...leadValues } = mapHospitalToLead(h);
+    const staffEst = estimateStaff(leadValues.doctorCnt);
+    const tier = assignTier({ clCd: leadValues.clCd, sggu: leadValues.sggu, estDate: leadValues.estDate, doctorCnt: leadValues.doctorCnt, staffEst, hasHomepage: !!leadValues.homepage }, ctx.settings.tier);
+    const [row] = await ctx.db
+      .insert(leads)
+      .values({ ...leadValues, staffEst, deptTags: [], tier: tier.tier, excludedReason: tier.tier === "EXCLUDED" ? tier.reason : null })
+      .onConflictDoUpdate({
+        target: leads.ykiho,
+        set: { name: leadValues.name, address: leadValues.address, homepage: sql`coalesce(${leads.homepage}, ${leadValues.homepage})`, hiraRaw: leadValues.hiraRaw },
+      })
+      .returning({ id: leads.id, createdAt: leads.createdAt, updatedAt: leads.updatedAt });
+    if (!row) continue;
+    if (row.createdAt.getTime() === row.updatedAt.getTime()) {
+      result.inserted += 1;
+      result.byTier[tier.tier] = (result.byTier[tier.tier] ?? 0) + 1;
+      if (tier.tier === "EXCLUDED") result.excluded += 1;
+    } else result.updated += 1;
+    if (phone) await ctx.db.insert(contacts).values({ leadId: row.id, type: "phone", value: phone, source: "hira", confidence: 1, isPrimary: true }).onConflictDoNothing();
+  }
+
+  for (const [dgsbjtCd, deptName] of Object.entries(DGSBJT_CODES)) {
+    const ykihos: string[] = [];
+    for (const clCd of clCds) {
+      const rows = await hira.listHospitals({ sidoCd: sido.code, sgguCd: input.sgguCd, clCd, dgsbjtCd, numOfRows });
+      ykihos.push(...rows.map((h) => h.ykiho).filter((y) => wanted.has(y)));
+    }
+    for (let i = 0; i < ykihos.length; i += 500) {
+      const chunk = ykihos.slice(i, i + 500);
+      await ctx.db
+        .update(leads)
+        .set({ deptTags: sql`array_append(${leads.deptTags}, ${deptName})` })
+        .where(and(inArray(leads.ykiho, chunk), sql`not (${deptName} = any(${leads.deptTags}))`));
+    }
+    ctx.log(null, `HIRA ${sido.name} ${deptName} ${ykihos.length}곳 태그`);
+  }
+  ctx.log(null, `전 진료과 리스트업 완료 ${sido.name} ${result.fetched}곳 (${((Date.now() - started) / 1000).toFixed(1)}s)`, { ...result });
   return result;
 }
 
