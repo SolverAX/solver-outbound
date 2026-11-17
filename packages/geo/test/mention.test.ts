@@ -33,4 +33,10 @@ describe("detectMention", () => {
     expect(r.competitors).toEqual(["연세바른정형외과"]);
     expect(r.position).toBe(2);
   });
+  it("정형외과 외 진료과 병원명도 인식한다", () => {
+    const r = detectMention("해운대구에서는 1. 센텀맑은피부과의원 2. 해운대연세이비인후과 3. 센텀서울내과 등이 있습니다. 해운대구 피부과 중에서는…", "센텀맑은피부과의원");
+    expect(r.mentioned).toBe(true);
+    expect(r.position).toBe(1);
+    expect(r.competitors).toEqual(["해운대연세이비인후과", "센텀서울내과"]);
+  });
 });

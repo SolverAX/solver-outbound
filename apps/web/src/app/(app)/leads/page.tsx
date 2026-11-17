@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
   const sp = await searchParams;
   const get = (k: string) => (typeof sp[k] === "string" && sp[k] ? (sp[k] as string) : undefined);
-  const filters: LeadFilters = { q: get("q"), sido: get("sido"), sggu: get("sggu"), tier: get("tier"), status: get("status"), email: get("email") as LeadFilters["email"], cl: get("cl") };
+  const filters: LeadFilters = { q: get("q"), sido: get("sido"), sggu: get("sggu"), tier: get("tier"), status: get("status"), email: get("email") as LeadFilters["email"], cl: get("cl"), dept: get("dept") };
   const sel = get("sel") ?? null;
   const page = Math.max(1, Number(get("page") ?? 1) || 1);
   const [rows, total, facets] = await Promise.all([listLeads(filters, page), countLeads(filters), leadFacets()]);
@@ -89,6 +89,7 @@ function Filters({ facets, filters }: { facets: Awaited<ReturnType<typeof leadFa
         <span className="mb-1 block text-muted-foreground">시군구</span>
         <input name="sggu" defaultValue={filters.sggu ?? ""} placeholder="강남구" className="h-8 w-full rounded-md border px-2 focus:border-primary focus:outline-none" />
       </label>
+      <Sel name="dept" label="진료과" value={filters.dept} options={facets.byDept.map((r) => ({ v: r.k ?? "none", l: r.k ?? "미분류", c: r.c }))} />
       <Sel name="cl" label="종별" value={filters.cl} options={[{ v: "31", l: "의원" }, { v: "21", l: "병원" }, { v: "11", l: "종합병원" }]} />
       <Sel name="tier" label="Tier" value={filters.tier} options={TIERS.map((t) => ({ v: t, l: TIER_LABEL[t], c: cnt(facets.byTier, t) }))} />
       <Sel name="status" label="상태" value={filters.status} options={LEAD_STATUSES.map((s) => ({ v: s, l: LEAD_STATUS_LABEL[s], c: cnt(facets.byStatus, s) }))} />

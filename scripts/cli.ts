@@ -22,7 +22,7 @@ import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { audits, leads, messages, tasks } from "@solver/db";
 import { LEAD_STATUS_LABEL, isDryRun } from "@solver/shared";
 import { SIDO_CODES } from "@solver/hira";
-import { createContext, runList, importCsvRows, runCrawlBatch, auditLead, AUDIT_DEPT, approveAudit, importPlaceData, prepareMail, sendPrepared, listQueued, pollGmail, runFollowup, runDailyDigest, runWeeklyDigest, type PlaceInput } from "@solver/pipeline";
+import { createContext, runList, importCsvRows, runCrawlBatch, auditLead, backfillDept, approveAudit, importPlaceData, prepareMail, sendPrepared, listQueued, pollGmail, runFollowup, runDailyDigest, runWeeklyDigest, type PlaceInput } from "@solver/pipeline";
 
 const ctx = createContext();
 const program = new Command().name("outreach").description(`병의원 GEO 아웃리치 CLI (DRY_RUN=${isDryRun()})`);
@@ -43,6 +43,17 @@ program
       console.table(r.byTier);
       console.log(r);
     }
+    process.exit(0);
+  });
+
+program
+  .command("dept")
+  .description("대표 진료과 분류 (기본: 비어 있는 리드만)")
+  .option("--force", "전부 다시 계산 (수동 지정도 덮어씀)")
+  .action(async (o) => {
+    const r = await backfillDept(ctx, { force: o.force });
+    console.table(r.byDept);
+    console.log({ scanned: r.scanned, assigned: r.assigned, unclassified: r.unclassified });
     process.exit(0);
   });
 
@@ -75,6 +86,7 @@ program
   .option("--skip-geo", "GEO 엔진 호출 생략")
   .option("--force", "이미 진단한 리드도 다시")
   .option("--limit <n>", "최대", "20")
+  .option("--dept <name>", "대표 진료과 (전체 = 분류된 모든 과)", "정형외과")
   .action(async (o) => {
     let targets;
     if (o.lead) targets = await ctx.db.select().from(leads).where(eq(leads.id, o.lead));
@@ -82,7 +94,7 @@ program
       const rows = await ctx.db
         .select({ lead: leads })
         .from(leads)
-        .where(and(sql`${leads.tier} <> 'EXCLUDED'`, sql`${AUDIT_DEPT} = any(${leads.deptTags})`, o.force ? sql`true` : sql`not exists (select 1 from ${audits} where ${audits.leadId} = ${leads.id} and ${audits.landingToken} is not null)`))
+        .where(and(sql`${leads.tier} <> 'EXCLUDED'`, o.dept === "전체" ? sql`${leads.dept} is not null` : eq(leads.dept, o.dept), o.force ? sql`true` : sql`not exists (select 1 from ${audits} where ${audits.leadId} = ${leads.id} and ${audits.landingToken} is not null)`))
         .limit(Number(o.limit));
       targets = rows.map((r) => r.lead);
     }

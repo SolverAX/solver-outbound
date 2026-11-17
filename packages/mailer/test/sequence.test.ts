@@ -33,4 +33,9 @@ describe("buildCallScript", () => {
     expect(s).toContain("A정형외과");
     expect(findBannedTerms(s)).toHaveLength(0);
   });
+  it("전화 스크립트의 검색어는 대표 진료과를 따른다", () => {
+    const s = buildCallScript({ 병원명: "맑은피부과의원", 지역: "해운대구", 진료과: "피부과", 플레이스순위: 4 });
+    expect(s).toContain('"해운대구 피부과" 검색에서 4위');
+    expect(s).not.toContain("정형외과");
+  });
 });

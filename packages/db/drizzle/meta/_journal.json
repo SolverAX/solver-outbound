@@ -15,6 +15,13 @@
       "when": 1790141443506,
       "tag": "0001_report_data",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794917242573,
+      "tag": "0002_kind_cannonball",
+      "breakpoints": true
     }
   ]
 }

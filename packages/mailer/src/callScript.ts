@@ -1,13 +1,14 @@
 export interface CallScriptVars {
   병원명: string;
   지역: string;
+  진료과?: string | null;
   플레이스순위?: number | string | null;
   개선포인트1?: string | null;
 }
 
 /** D+2 전화 태스크 스크립트 (3줄: 인사 · 메일 언급 · 30분 요청). 금지어 없음. */
 export function buildCallScript(v: CallScriptVars): string {
-  const rank = v.플레이스순위 != null && v.플레이스순위 !== "" ? `"${v.지역} 정형외과" 검색에서 ${v.플레이스순위}위로 나오는 현재 상태` : `${v.지역} 검색 노출 현재 상태`;
+  const rank = v.플레이스순위 != null && v.플레이스순위 !== "" ? `"${[v.지역, v.진료과].filter(Boolean).join(" ")}" 검색에서 ${v.플레이스순위}위로 나오는 현재 상태` : `${v.지역} 검색 노출 현재 상태`;
   const point = v.개선포인트1 ? ` 특히 "${v.개선포인트1}" 항목은 바로 손볼 수 있는 부분입니다.` : "";
   return [
     `안녕하세요, 솔버의 ○○○입니다. ${v.병원명} 원장님 또는 행정실장님과 잠깐 통화 가능할까요?`,

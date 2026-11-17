@@ -1,6 +1,6 @@
 import { desc, eq } from "drizzle-orm";
 import { auditRuns, audits, crawlResults, leads, type Lead, type PlaceAudit } from "@solver/db";
-import { createEngines, runGeoAudit } from "@solver/geo";
+import { buildQuestions, createEngines, hasDeptQuestions, runGeoAudit, templatesForDept } from "@solver/geo";
 import { suggestTopFixes } from "@solver/llm";
 import { buildScores, checkReportBannedTerms, reportToHtml, reportToPdf, type ReportData } from "@solver/report";
 import { token } from "@solver/shared/node";
@@ -8,8 +8,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { PipelineContext } from "./context";
 
-/** 진단·발송 템플릿이 지원하는 진료과. 진료과별 질문·템플릿이 생기면 이 제한을 푼다. */
-export const AUDIT_DEPT = "정형외과";
+/** 진단 가능 여부: 대표 진료과가 정해져 있고 그 과의 질문 세트가 있어야 한다. */
+export function auditBlockReason(lead: Pick<Lead, "dept" | "name">): string | null {
+  if (!lead.dept) return `대표 진료과 미분류 (${lead.name}) — 진료과를 정한 뒤 진단하세요`;
+  if (!hasDeptQuestions(lead.dept)) return `${lead.dept} 질문 세트가 없음 (${lead.name})`;
+  return null;
+}
 
 /** 강우 플레이스 데이터 (JSON/CSV 입력) — PRD 14절 미결 인터페이스의 초안 */
 export interface PlaceInput {
@@ -46,8 +50,10 @@ export interface AuditOneResult {
 
 /** PRD 6절: 병원 1곳 진단 → audits/audit_runs, 리포트 HTML(+PDF), 랜딩 토큰. */
 export async function auditLead(ctx: PipelineContext, lead: Lead, opts: { place?: PlaceInput | null; skipGeo?: boolean } = {}): Promise<AuditOneResult> {
-  // GEO 질문·리포트·메일 템플릿이 아직 정형외과 전용이다. 다른 진료과에 그대로 돌리면 틀린 내용이 나간다.
-  if (!lead.deptTags.includes(AUDIT_DEPT)) throw new Error(`진단 불가: ${AUDIT_DEPT} 진료과목이 없는 리드 (${lead.name})`);
+  // 질문 세트는 대표 진료과로 갈린다. 과가 없는 리드에 다른 과 질문을 돌리면 틀린 내용이 나간다.
+  const blocked = auditBlockReason(lead);
+  if (blocked) throw new Error(`진단 불가: ${blocked}`);
+  const dept = lead.dept!;
   // 최신 크롤 결과 → 홈페이지 축
   const [crawl] = await ctx.db.select().from(crawlResults).where(eq(crawlResults.leadId, lead.id)).orderBy(desc(crawlResults.fetchedAt)).limit(1);
   const site: ReportData["site"] | null =
@@ -79,7 +85,9 @@ export async function auditLead(ctx: PipelineContext, lead: Lead, opts: { place?
     const engines = createEngines([...ctx.settings.geo.engines], { dryRun: ctx.dryRun, targetName: lead.name, skipMissing: true, onSkip: (n, why) => ctx.log(lead.id, `GEO 엔진 제외 ${n}: ${why}`) });
     if (engines.length) {
       const ownDomains = [lead.homepage, place?.placeUrl].filter((u): u is string => !!u).map((u) => new URL(u).hostname);
-      geoResult = await runGeoAudit({ hospitalName: lead.name, sggu: lead.sggu, emd: lead.emd, ownDomains, engines, repeats: ctx.settings.geo.repeats, costCapKrw: ctx.settings.geo.costCapKrw });
+      // 정형외과 질문은 설정에서 바꿀 수 있고, 그 외 과는 코드의 과별 세트를 쓴다
+      const questions = buildQuestions({ sggu: lead.sggu, emd: lead.emd, dept, templates: templatesForDept(dept, ctx.settings.geo.questionTemplates) });
+      geoResult = await runGeoAudit({ hospitalName: lead.name, sggu: lead.sggu, emd: lead.emd, dept, questions, ownDomains, engines, repeats: ctx.settings.geo.repeats, costCapKrw: ctx.settings.geo.costCapKrw });
       const byQuery = new Map<string, { mentioned: boolean; engines: Set<string> }>();
       for (const r of geoResult.runs) {
         const q = byQuery.get(r.query) ?? { mentioned: false, engines: new Set<string>() };

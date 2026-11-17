@@ -8,6 +8,8 @@ export interface RunGeoAuditInput {
   aliases?: string[];
   sggu: string;
   emd?: string | null;
+  /** 대표 진료과 — 질문 세트가 이 값으로 갈린다 (기본 정형외과) */
+  dept?: string;
   ownDomains?: string[];
   engines: GeoEngine[];
   repeats?: number;
@@ -29,7 +31,7 @@ export async function runGeoAudit(input: RunGeoAuditInput): Promise<RunGeoAuditO
   const repeats = input.repeats ?? 3;
   const concurrency = Math.max(1, input.concurrency ?? 4);
   const cap = input.costCapKrw ?? Number.POSITIVE_INFINITY;
-  const questions = input.questions ?? buildQuestions({ sggu: input.sggu, emd: input.emd });
+  const questions = input.questions ?? buildQuestions({ sggu: input.sggu, emd: input.emd, dept: input.dept });
 
   const jobs: { engine: GeoEngine; query: string; runNo: number }[] = [];
   for (const query of questions) for (const engine of input.engines) for (let runNo = 1; runNo <= repeats; runNo++) jobs.push({ engine, query, runNo });

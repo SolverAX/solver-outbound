@@ -12,6 +12,8 @@ export interface LeadFilters {
   status?: string;
   email?: "yes" | "no";
   cl?: string;
+  /** 대표 진료과. "none" = 미분류 */
+  dept?: string;
 }
 
 export const PAGE_SIZE = 50;
@@ -24,6 +26,7 @@ function leadWhere(f: LeadFilters): SQL | undefined {
   if (f.tier) where.push(sql`coalesce(${leads.tierOverride}, ${leads.tier}) = ${f.tier}`);
   if (f.status) where.push(eq(leads.status, f.status as never));
   if (f.cl) where.push(eq(leads.clCd, f.cl));
+  if (f.dept) where.push(f.dept === "none" ? isNull(leads.dept) : eq(leads.dept, f.dept));
   const emailSub = sql`exists (select 1 from ${contacts} c where c.lead_id = "leads"."id" and c.type = 'email')`;
   if (f.email === "yes") where.push(emailSub);
   if (f.email === "no") where.push(sql`not ${emailSub}`);
@@ -61,9 +64,10 @@ export async function leadFacets() {
   const rows = await db.execute<{ kind: string; k: string | null; c: number }>(sql`
     select 'status' as kind, status::text as k, count(*)::int as c from leads group by status
     union all select 'tier', coalesce(tier_override, tier)::text, count(*)::int from leads group by coalesce(tier_override, tier)
-    union all select 'sido', sido, count(*)::int from leads group by sido`);
+    union all select 'sido', sido, count(*)::int from leads group by sido
+    union all select 'dept', dept, count(*)::int from leads group by dept`);
   const pick = (kind: string) => rows.filter((r) => r.kind === kind).map((r) => ({ k: r.k, c: Number(r.c) }));
-  return { byStatus: pick("status") as { k: LeadStatus; c: number }[], byTier: pick("tier"), bySido: pick("sido") };
+  return { byStatus: pick("status") as { k: LeadStatus; c: number }[], byTier: pick("tier"), bySido: pick("sido"), byDept: pick("dept").sort((a, b) => b.c - a.c) };
 }
 
 export async function getLeadDetail(id: string) {

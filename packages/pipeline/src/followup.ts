@@ -23,7 +23,7 @@ export async function runFollowup(ctx: PipelineContext, now = new Date()) {
     }
     if (step.kind === "call") {
       const [audit] = await ctx.db.select().from(ctx.db._.fullSchema.audits).where(eq(ctx.db._.fullSchema.audits.leadId, lead.id)).limit(1);
-      const script = buildCallScript({ 병원명: lead.name, 지역: lead.sggu ?? "", 플레이스순위: lead.placeRank ?? undefined, 개선포인트1: audit?.topFixes[0] });
+      const script = buildCallScript({ 병원명: lead.name, 지역: lead.sggu ?? "", 진료과: lead.dept, 플레이스순위: lead.placeRank ?? undefined, 개선포인트1: audit?.topFixes[0] });
       const t = await upsertTask(ctx.db, { leadId: lead.id, sequenceId: seq.id, type: "call", title: `D+2 전화: ${lead.name}`, dueAt: step.at, script, dedupeKey: `seq:${seq.id}:step:${nextStep}` });
       if (t) calls++;
       await ctx.db.update(leads).set({ nextAction: "D+2 전화", nextActionAt: step.at }).where(eq(leads.id, lead.id));

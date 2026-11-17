@@ -6,11 +6,16 @@ export interface MentionResult {
   competitors: string[];
 }
 
-const SUFFIX = "(?:정형외과의원|정형외과병원|정형외과|의원|병원|클리닉|센터)";
+/** 병원명에 붙는 진료과 표기 (긴 것부터 — "정형외과"가 "외과"보다 먼저 맞아야 한다) */
+const DEPT_WORDS = ["심장혈관흉부외과", "마취통증의학과", "정신건강의학과", "소아청소년과", "통증의학과", "비뇨의학과", "영상의학과", "재활의학과", "가정의학과", "이비인후과", "신경정신과", "흉부외과", "비뇨기과", "산부인과", "정형외과", "신경외과", "성형외과", "소아과", "정신과", "피부과", "신경과", "내과", "안과", "외과"];
+const DEPT_ALT = DEPT_WORDS.join("|");
+const SUFFIX = `(?:(?:${DEPT_ALT})(?:의원|병원)?|의원|병원|클리닉|센터)`;
 /** 한글·영문·숫자 조합 + 병원류 접미사. 공백 1칸 허용 (예: "강남 정형외과의원") */
 const NAME_RE = new RegExp(`[가-힣A-Za-z0-9&·]+(?:\\s?[가-힣A-Za-z0-9&·]+)*?\\s?${SUFFIX}`, "g");
 
-const GENERIC = new Set(["정형외과", "의원", "병원", "클리닉", "센터", "정형외과의원", "정형외과병원", "대학병원", "종합병원", "동물병원"]);
+const GENERIC = new Set(["의원", "병원", "클리닉", "센터", "대학병원", "종합병원", "동물병원", ...DEPT_WORDS.flatMap((d) => [d, `${d}의원`, `${d}병원`])]);
+
+const REGION_GENERIC_RE = new RegExp(`^[가-힣]+(시|구|군|동|읍|면|역)\\s?${SUFFIX}$`);
 
 export function normalizeHospitalName(name: string): string {
   return name
@@ -31,7 +36,7 @@ function extractCandidates(text: string): string[] {
     raw = raw.replace(/^(추천|근처|인근|유명한|좋은|있는|위치한|같은|또는|그리고|및|과|와|은|는|이|가|의|에|서울|경기|인천)\s+/, "");
     if (GENERIC.has(raw.replace(/\s+/g, ""))) continue;
     // "강남구 정형외과", "역삼동 병원"처럼 지역명 + 일반명사 조합은 병원명이 아니다
-    if (/^[가-힣]+(시|구|군|동|읍|면|역)\s?(정형외과의원|정형외과병원|정형외과|의원|병원|클리닉|센터)$/.test(raw)) continue;
+    if (REGION_GENERIC_RE.test(raw)) continue;
     found.push(raw);
   }
   return found;

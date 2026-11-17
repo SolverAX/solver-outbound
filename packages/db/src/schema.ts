@@ -67,6 +67,7 @@ export const leads = pgTable(
     doctorCnt: integer("doctor_cnt"),
     staffEst: integer("staff_est"), // 추정, UI에 "추정" 표시
     deptTags: text("dept_tags").array().notNull().default([]),
+    dept: text("dept"), // 대표 진료과 1개 (병원명 → 단일 태그 순으로 추정, 없으면 null = 미분류). 진단 질문·메일 문구 기준
     tier: tierEnum("tier"),
     tierOverride: tierEnum("tier_override"),
     status: leadStatusEnum("status").notNull().default("listed"),
@@ -91,7 +92,7 @@ export const leads = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index("leads_status_idx").on(t.status), index("leads_sggu_idx").on(t.sido, t.sggu), index("leads_tier_idx").on(t.tier)],
+  (t) => [index("leads_status_idx").on(t.status), index("leads_sggu_idx").on(t.sido, t.sggu), index("leads_tier_idx").on(t.tier), index("leads_dept_idx").on(t.dept)],
 );
 
 /* ───────────── contacts ───────────── */

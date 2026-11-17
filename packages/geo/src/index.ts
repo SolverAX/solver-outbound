@@ -5,3 +5,4 @@ export * from "./mention";
 export * from "./score";
 export * from "./runner";
 export * from "./engines";
+export * from "./deptQuestions";

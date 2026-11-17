@@ -2,6 +2,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { contacts, leads } from "@solver/db";
 import { HiraClient, DGSBJT_BY_NAME, DGSBJT_CODES, assignTier, estimateStaff, mapHospitalToLead, resolveSido, type HospBasisItem } from "@solver/hira";
 import type { PipelineContext } from "./context";
+import { backfillDept } from "./dept";
 
 export interface ListInput {
   sido: string; // "서울" | "서울특별시" ...
@@ -92,6 +93,7 @@ export async function runList(ctx: PipelineContext, input: ListInput): Promise<L
         .onConflictDoNothing();
     }
   }
+  await backfillDept(ctx);
   ctx.log(null, `리스트업 완료 ${result.fetched}곳 (${((Date.now() - started) / 1000).toFixed(1)}s)`, { ...result });
   return result;
 }
@@ -158,6 +160,7 @@ export async function runListAllDepts(ctx: PipelineContext, input: ListInput): P
     }
     ctx.log(null, `HIRA ${sido.name} ${deptName} ${ykihos.length}곳 태그`);
   }
+  await backfillDept(ctx);
   ctx.log(null, `전 진료과 리스트업 완료 ${sido.name} ${result.fetched}곳 (${((Date.now() - started) / 1000).toFixed(1)}s)`, { ...result });
   return result;
 }

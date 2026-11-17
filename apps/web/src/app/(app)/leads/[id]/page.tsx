@@ -62,6 +62,7 @@ export default async function LeadDetail({ params }: PageProps<"/leads/[id]">) {
             <Field label="개설">{lead.estDate ? `${fmtDate(lead.estDate)} (${years(lead.estDate)}년차)` : "—"}</Field>
             <Field label="의사 수">{lead.doctorCnt ?? "—"}</Field>
             <Field label="직원 수">{lead.staffEst != null ? `${lead.staffEst}명 (추정)` : "—"}</Field>
+            <Field label="대표 진료과">{lead.dept ?? "미분류"}</Field>
             <Field label="진료과목">{lead.deptTags.join(", ") || "—"}</Field>
             <Field label="홈페이지">{lead.homepage ? <a href={lead.homepage} target="_blank" className="text-primary hover:underline">{lead.homepage.replace(/^https?:\/\//, "")}</a> : "없음"}{lead.homepageAutoFound && " (자동 발견)"}</Field>
             <Field label="유입">{lead.utmSource ?? "—"}</Field>

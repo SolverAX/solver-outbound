@@ -20,6 +20,7 @@ export function LeadsTable({ rows, selected, onSelect }: { rows: LeadRow[]; sele
         <tr className="h-10 border-b text-left text-xs font-medium text-muted-foreground">
           <th className="pl-4 pr-2 min-w-[180px]">병원명</th>
           <th className="px-2">지역</th>
+          <th className="px-2">진료과</th>
           <th className="px-2">종별</th>
           <th className="px-2 text-right">개원</th>
           <th className="px-2 text-right">의사</th>
@@ -45,6 +46,7 @@ export function LeadsTable({ rows, selected, onSelect }: { rows: LeadRow[]; sele
               {audited && <span className={cn("ml-1.5 text-[10px]", approved ? "text-primary" : "text-muted-foreground")}>{approved ? "승인" : "진단"}</span>}
             </td>
             <td className="px-2 whitespace-nowrap">{[l.sggu, l.emd].filter(Boolean).join(" ")}</td>
+            <td className="px-2 whitespace-nowrap">{l.dept ?? <span className="text-muted-foreground">미분류</span>}</td>
             <td className="px-2">{l.clName ?? l.clCd ?? "—"}</td>
             <td className="px-2 text-right tabular">{years(l.estDate) ? `${years(l.estDate)}년` : "—"}</td>
             <td className="px-2 text-right tabular">{l.doctorCnt ?? "—"}</td>

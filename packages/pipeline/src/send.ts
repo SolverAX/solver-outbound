@@ -47,6 +47,7 @@ export async function prepareMail(ctx: PipelineContext, lead: Lead, templateKey 
   const vars: Record<string, string | number | null> = {
     병원명: lead.name,
     지역: lead.sggu ?? lead.sido ?? null,
+    진료과: lead.dept ?? null,
     첫문장: firstLine,
     플레이스순위: audit?.place?.keywords[0]?.rank ?? lead.placeRank ?? null,
     리뷰수: audit?.place?.reviewCnt ?? lead.reviewCnt ?? null,
